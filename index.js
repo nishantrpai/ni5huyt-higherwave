@@ -1,8 +1,8 @@
 /**
- * YouTube 24/7 Livestream Bot (Railway Safe)
- * - Auto-restarts FFmpeg
- * - Stable RAM / CPU usage
- * - Reconnects using the same stream key
+ * Railway-safe YouTube 24/7 Livestream
+ * - Hard memory caps for FFmpeg
+ * - Single thread (prevents RAM blowups)
+ * - Auto-restart watchdog
  */
 
 require('dotenv').config();
@@ -10,80 +10,75 @@ const { spawn } = require('child_process');
 
 const STREAM_KEY = process.env.YT_STREAM_KEY;
 if (!STREAM_KEY) {
-  console.error('❌ Missing YT_STREAM_KEY env var');
+  console.error('❌ Missing YT_STREAM_KEY');
   process.exit(1);
 }
 
 const RTMP_URL = `rtmp://a.rtmp.youtube.com/live2/${STREAM_KEY}`;
 const INPUT_FILE = 'input.mp4';
-const RESTART_DELAY = 5000;
+const RESTART_DELAY_MS = 5000;
 
 let ffmpeg = null;
 
 function startStream() {
-  console.log('▶️ Starting YouTube livestream...');
+  console.log('▶️ Starting FFmpeg stream');
 
-  ffmpeg = spawn('ffmpeg', [
-    // Real-time pacing (VERY IMPORTANT)
-    '-re',
+const args = [
+  '-re',
+  '-stream_loop', '-1',
+  '-i', 'input.mp4',
 
-    // Loop video forever
-    '-stream_loop', '-1',
-    '-i', INPUT_FILE,
+  // Hard memory caps (this is what matters)
+  '-rtbufsize', '64M',
+  '-max_muxing_queue_size', '256',
+  '-threads', '1',
 
-    // Video encoding (safe + stable)
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-pix_fmt', 'yuv420p',
-    '-profile:v', 'main',
-    '-level', '4.1',
-    '-g', '60',
-    '-keyint_min', '60',
-    '-sc_threshold', '0',
-    '-b:v', '4500k',
-    '-maxrate', '4500k',
-    '-bufsize', '9000k',
+  // Video: lowest-memory H.264 that YouTube accepts
+  '-c:v', 'libx264',
+  '-profile:v', 'baseline',
+  '-preset', 'ultrafast',
+  '-tune', 'zerolatency',
+  '-pix_fmt', 'yuv420p',
+  '-g', '30',
+  '-bf', '0',
+  '-b:v', '1800k',
+  '-maxrate', '1800k',
+  '-bufsize', '3600k',
 
-    // Audio encoding
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-ar', '44100',
+  // Audio
+  '-c:a', 'aac',
+  '-b:a', '64k',
+  '-ar', '44100',
 
-    // Output to YouTube RTMP
-    '-f', 'flv',
-    RTMP_URL
-  ], {
-    stdio: ['ignore', 'ignore', 'pipe']
-  });
+  '-f', 'flv',
+  RTMP_URL
+];
 
-  // Log only stderr (FFmpeg uses stderr for progress)
-  ffmpeg.stderr.on('data', data => {
-    console.log(`[ffmpeg] ${data.toString().trim()}`);
+  ffmpeg = spawn('ffmpeg', args, {
+    stdio: ['ignore', 'ignore', 'ignore'] // 🚫 no log buffering
   });
 
   ffmpeg.on('exit', (code, signal) => {
     console.error(`⚠️ FFmpeg exited (code=${code}, signal=${signal})`);
     ffmpeg = null;
-    console.log(`🔁 Restarting stream in ${RESTART_DELAY / 1000}s...`);
-    setTimeout(startStream, RESTART_DELAY);
+    console.log(`🔁 Restarting in ${RESTART_DELAY_MS / 1000}s`);
+    setTimeout(startStream, RESTART_DELAY_MS);
   });
 
   ffmpeg.on('error', err => {
-    console.error('❌ Failed to start FFmpeg:', err);
+    console.error('❌ FFmpeg failed to start', err);
   });
 }
 
-// Graceful shutdown (Railway redeploys / restarts)
+// Graceful shutdown (Railway redeploys)
 function shutdown() {
-  console.log('🛑 Shutting down stream...');
-  if (ffmpeg) {
-    ffmpeg.kill('SIGINT');
-  }
+  console.log('🛑 Shutting down');
+  if (ffmpeg) ffmpeg.kill('SIGINT');
   process.exit(0);
 }
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-// Start the loop
+// Start streaming
 startStream();
