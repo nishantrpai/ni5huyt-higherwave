@@ -47,8 +47,10 @@ const args = [
 
   // Audio
   '-c:a', 'aac',
-  '-b:a', '64k',
-  '-ar', '44100',
+  '-b:a', '128k',
+  '-ar', '48000',
+  '-ac', '2',
+
 
   '-f', 'flv',
   RTMP_URL
